@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Piano Tiles Perfect Clone</title>
+    <!-- Tailwind CSS for layout -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&display=swap');
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #111;
+            overflow: hidden;
+            font-family: 'Montserrat', sans-serif;
+            touch-action: none; /* Prevent browser scrolling/zooming */
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #app-container {
+            position: relative;
+            width: 100%;
+            max-width: 450px; /* Keep it phone-sized on desktop */
+            height: 100%;
+            margin: 0 auto;
+            background: linear-gradient(180deg, #4facfe 0%, #a18cd1 100%); /* Blue to Purple gradient */
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+
+        /* Full screen overlay generic style */
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+
+        #start-screen {
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+        }
+
+        #game-over-screen {
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+        }
+
+        #game-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            display: none;
+        }
+
+        /* Massive foolproof button */
+        .play-btn {
+            background: linear-gradient(to right, #00c6ff, #0072ff);
+            border: 4px solid #fff;
+            color: white;
+            font-size: 28px;
+            font-weight: 900;
+            padding: 20px 40px;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 10px 30px rgba(0, 198, 255, 0.6);
+            transition: transform 0.1s;
+            text-transform: uppercase;
+        }
+        .play-btn:active {
+            transform: scale(0.95);
+        }
+
+        #score-display {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            color: #fff;
+            font-size: 48px;
+            font-weight: 900;
+            text-shadow: 0px 0px 15px rgba(255,255,255,0.8);
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        #countdown-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 80px;
+            font-weight: 900;
+            text-shadow: 0px 0px 20px rgba(0, 198, 255, 1);
+            z-index: 30;
+            pointer-events: none;
+            display: none;
+            animation: pop 1s infinite;
+        }
+
+        @keyframes pop {
+            0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+            20% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+            50% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(0.9); opacity: 0; }
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        
+        <!-- Score HUD -->
+        <div id="score-display" style="display: none;">0</div>
+
+        <!-- Countdown HUD -->
+        <div id="countdown-display">3</div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="screen">
+            <h1 class="text-white text-5xl font-black mb-10 text-center drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">
+                PIANO<br>TILES
+            </h1>
+            <!-- Inline onClick for maximum reliability -->
+            <button id="start-btn" class="play-btn" onclick="startGame()">PLAY SONG</button>
+            <p class="text-white mt-6 opacity-70">Tap the tiles to play!</p>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over-screen" class="screen">
+            <h2 class="text-red-400 text-5xl font-black mb-4">GAME OVER</h2>
+            <div class="text-white text-2xl mb-8">Score: <span id="final-score" class="text-cyan-400 font-black text-4xl">0</span></div>
+            <button class="play-btn" onclick="restartGame()">TRY AGAIN</button>
+        </div>
+
+        <!-- Game Screen (Canvas) -->
+        <div id="game-screen">
+            <canvas id="game-canvas"></canvas>
+        </div>
+
+    </div>
+
+    <script>
+        const startScreen = document.getElementById('start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const scoreDisplay = document.getElementById('score-display');
+        const countdownDisplay = document.getElementById('countdown-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency on base
+
+        // Game State Variables
+        let isPlaying = false;
+        let isCountingDown = false;
+        let score = 0;
+        let speed = 6;
+        let tiles = [];
+        let animationFrameId;
+        let audioCtx;
+        
+        // C Major scale frequencies for simple synthesized beeps
+        const notes = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25];
+        let noteIndex = 0;
+
+        // Resize Canvas to fit container
+        function resizeCanvas() {
+            canvas.width = gameScreen.clientWidth;
+            canvas.height = gameScreen.clientHeight;
+        }
+        window.addEventListener('resize', () => {
+            if (isPlaying) resizeCanvas();
+        });
+
+        function initAudio() {
+            // Strictly initialized inside user gesture
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!audioCtx) {
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playBeep() {
+            if (!audioCtx) return;
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.type = 'triangle'; // Smooth piano-like tone
+                osc.frequency.setValueAtTime(notes[noteIndex % notes.length], audioCtx.currentTime);
+                noteIndex++;
+
+                // Envelope
+                gain.gain.setValueAtTime(0, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.5);
+            } catch(e) {
+                console.warn('Audio play failed', e);
+            }
+        }
+
+        class Tile {
+            constructor(yOffset) {
+                this.lane = Math.floor(Math.random() * 4); // 0, 1, 2, 3
+                this.height = Math.random() > 0.7 ? 240 : 140; // 30% chance for long tile
+                this.y = yOffset - this.height;
+                this.isBlue = Math.random() > 0.5; // Blue or Black tile
+                this.clicked = false;
+            }
+
+            draw(ctx, laneWidth) {
+                if (this.clicked) return; // Don't draw if clicked
+
+                const x = this.lane * laneWidth;
+                const margin = 2; // small gap between lanes
+                const drawX = x + margin;
+                const drawW = laneWidth - margin * 2;
+                const drawY = this.y;
+                const drawH = this.height;
+
+                // Base Tile Color
+                if (this.isBlue) {
+                    // Bright Cyan/Blue Gradient
+                    const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawH);
+                    grad.addColorStop(0, '#00d2ff');
+                    grad.addColorStop(1, '#0066ff');
+                    ctx.fillStyle = grad;
+                } else {
+                    // Dark/Black Gradient
+                    const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawH);
+                    grad.addColorStop(0, '#2d3748');
+                    grad.addColorStop(1, '#1a202c');
+                    ctx.fillStyle = grad;
+                }
+
+                // Draw rounded rectangle base
+                ctx.beginPath();
+                ctx.roundRect(drawX, drawY, drawW, drawH, 10);
+                ctx.fill();
+
+                // Add glowing border for blue tiles
+                if (this.isBlue) {
+                    ctx.strokeStyle = '#e0f2fe';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else {
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+
+                // --- Draw the Line and Circle (matching the reference image) ---
+                const centerX = drawX + drawW / 2;
+                const lineStartY = drawY + 20;
+                const circleY = drawY + drawH - 25;
+                const circleRadius = 8;
+
+                ctx.strokeStyle = this.isBlue ? '#ffffff' : '#a0aec0';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                // Vertical Line
+                ctx.moveTo(centerX, lineStartY);
+                ctx.lineTo(centerX, circleY - circleRadius);
+                ctx.stroke();
+                
+                // Circle at bottom
+                ctx.beginPath();
+                ctx.arc(centerX, circleY, circleRadius, 0, Math.PI * 2);
+                if (this.isBlue) {
+                    ctx.shadowColor = '#fff';
+                    ctx.shadowBlur = 10;
+                }
+                ctx.stroke();
+                ctx.shadowBlur = 0; // reset shadow
+            }
+        }
+
+        function gameLoop() {
+            if (!isPlaying && !isCountingDown) return;
+
+            const w = canvas.width;
+            const h = canvas.height;
+            const laneWidth = w / 4;
+
+            // Clear Background with Gradient
+            const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
+            bgGrad.addColorStop(0, '#4facfe'); // Blue
+            bgGrad.addColorStop(1, '#a18cd1'); // Purple
+            ctx.fillStyle = bgGrad;
+            ctx.fillRect(0, 0, w, h);
+
+            // Draw Lane Dividers (White vertical lines)
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.lineWidth = 1;
+            for(let i = 1; i < 4; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * laneWidth, 0);
+                ctx.lineTo(i * laneWidth, h);
+                ctx.stroke();
+            }
+
+            // Update Speed based on score
+            const currentSpeed = speed + (score * 0.1);
+            let lowestUnclickedY = -9999;
+
+            // Process Tiles
+            for (let i = 0; i < tiles.length; i++) {
+                let t = tiles[i];
+                
+                if (isPlaying) {
+                    t.y += currentSpeed;
+                }
+
+                t.draw(ctx, laneWidth);
+
+                if (!t.clicked && t.y > lowestUnclickedY) {
+                    lowestUnclickedY = t.y;
+                }
+
+                // Check Game Over (Tile fell off bottom without being clicked)
+                if (isPlaying && !t.clicked && t.y > h) {
+                    gameOver();
+                    return; // Stop the loop immediately
+                }
+            }
+
+            // Remove old clicked tiles that are way off screen
+            if (isPlaying) {
+                tiles = tiles.filter(t => t.y < h + 200 || !t.clicked);
+
+                // Spawn new tiles if needed
+                const lastTile = tiles[tiles.length - 1];
+                if (lastTile.y > 0) {
+                    // Gap between tiles
+                    tiles.push(new Tile(lastTile.y - 10)); 
+                }
+            }
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function handleInput(event) {
+            if (!isPlaying) return;
+            event.preventDefault(); // Prevent double firing on touch devices
+
+            const rect = canvas.getBoundingClientRect();
+            // Support both touch and mouse clicks
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+            
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+            const laneWidth = canvas.width / 4;
+            const clickedLane = Math.floor(x / laneWidth);
+
+            // Find the lowest unclicked tile in the clicked lane
+            let targetTile = null;
+            let targetIndex = -1;
+            
+            for (let i = 0; i < tiles.length; i++) {
+                if (tiles[i].lane === clickedLane && !tiles[i].clicked) {
+                    if (!targetTile || tiles[i].y > targetTile.y) {
+                        targetTile = tiles[i];
+                        targetIndex = i;
+                    }
+                }
+            }
+
+            if (targetTile) {
+                // Generous hitbox: anywhere from the top of the tile to way below it
+                if (targetTile.y + targetTile.height > y - 200 && targetTile.y < y + 300) {
+                    // Hit!
+                    targetTile.clicked = true;
+                    score++;
+                    scoreDisplay.innerText = score;
+                    playBeep();
+                }
+            }
+        }
+
+        function handleKeyInput(event) {
+            if (!isPlaying) return;
+            
+            // Map keys D, F, J, K to lanes 0, 1, 2, 3
+            const keyMap = { 'd': 0, 'f': 1, 'j': 2, 'k': 3 };
+            const key = event.key.toLowerCase();
+            
+            if (keyMap[key] !== undefined) {
+                const clickedLane = keyMap[key];
+                
+                let targetTile = null;
+                for (let i = 0; i < tiles.length; i++) {
+                    if (tiles[i].lane === clickedLane && !tiles[i].clicked) {
+                        if (!targetTile || tiles[i].y > targetTile.y) {
+                            targetTile = tiles[i];
+                        }
+                    }
+                }
+
+                if (targetTile) {
+                    // Keyboard generic hitbox
+                    if (targetTile.y + targetTile.height > canvas.height / 2 - 200 && targetTile.y < canvas.height + 100) {
+                        targetTile.clicked = true;
+                        score++;
+                        scoreDisplay.innerText = score;
+                        playBeep();
+                    }
+                }
+            }
+        }
+
+        // Attach event listeners to canvas
+        canvas.addEventListener('mousedown', handleInput);
+        canvas.addEventListener('touchstart', handleInput, { passive: false });
+        window.addEventListener('keydown', handleKeyInput);
+
+        // --- Core Application Functions ---
+
+        window.startGame = function() {
+            // 1. Initialize Audio exactly here
+            initAudio();
+
+            // 2. Hide Start Screen, Show Game Screen
+            startScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            gameScreen.style.display = 'block';
+            scoreDisplay.style.display = 'block';
+
+            // 3. Reset Game State
+            resizeCanvas();
+            score = 0;
+            scoreDisplay.innerText = '0';
+            speed = 6;
+            noteIndex = 0;
+            isPlaying = false;
+            isCountingDown = true;
+
+            // Generate initial tiles (少し高い位置からスタートさせて間を作る)
+            tiles = [];
+            let startY = canvas.height - 400; // 以前より上から開始
+            for(let i = 0; i < 5; i++) {
+                let t = new Tile(startY);
+                tiles.push(t);
+                startY -= (t.height + 20); // Spacing
+            }
+
+            // 4. Start Game Loop (描画だけ先に行う)
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            gameLoop();
+
+            // 5. Start Countdown
+            countdownDisplay.style.display = 'block';
+            let count = 3;
+            countdownDisplay.innerText = count;
+            
+            // 古いインターバルが残っている場合を考慮してクリア（安全策）
+            if (window.countdownInterval) clearInterval(window.countdownInterval);
+
+            window.countdownInterval = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    countdownDisplay.innerText = count;
+                } else if (count === 0) {
+                    countdownDisplay.innerText = "GO!";
+                } else {
+                    clearInterval(window.countdownInterval);
+                    countdownDisplay.style.display = 'none';
+                    isCountingDown = false;
+                    isPlaying = true; // ここで初めてタイルが動き出す
+                }
+            }, 1000);
+        };
+
+        window.restartGame = function() {
+            gameOverScreen.style.display = 'none';
+            startGame();
+        };
+
+        window.gameOver = function() {
+            isPlaying = false;
+            cancelAnimationFrame(animationFrameId);
+            
+            // UI Update
+            finalScoreDisplay.innerText = score;
+            gameScreen.style.display = 'none';
+            scoreDisplay.style.display = 'none';
+            gameOverScreen.style.display = 'flex';
+        };
+
+    </script>
+</body>
+</html>
